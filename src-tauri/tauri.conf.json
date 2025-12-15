@@ -16,9 +16,6 @@
         "title": "Antigravity Tools",
         "width": 1024,
         "height": 700,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "transparent": true,
         "visible": false
       }
     ],

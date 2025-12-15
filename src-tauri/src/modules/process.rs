@@ -1,7 +1,7 @@
-use sysinfo::System;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use sysinfo::System;
 
 /// 检查 Antigravity 是否在运行
 pub fn is_antigravity_running() -> bool {
@@ -17,7 +17,8 @@ pub fn is_antigravity_running() -> bool {
 
         #[allow(unused_variables)]
         let name = process.name().to_string_lossy().to_lowercase();
-        let exe_path = process.exe()
+        let exe_path = process
+            .exe()
             .and_then(|p| p.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -33,14 +34,23 @@ pub fn is_antigravity_running() -> bool {
         {
             // 严格匹配进程名，避免 false positive (如 esbuild.exe 在 antigravity 目录下)
             if name == "antigravity.exe" {
-                 crate::modules::logger::log_info(&format!("检测到 Antigravity 进程: {} (PID: {}) Path: {}", name, pid, exe_path));
-                 return true;
+                crate::modules::logger::log_info(&format!(
+                    "检测到 Antigravity 进程: {} (PID: {}) Path: {}",
+                    name, pid, exe_path
+                ));
+                return true;
             }
         }
 
         #[cfg(target_os = "linux")]
         {
-            if name == "antigravity" || exe_path.contains("antigravity") {
+            // 嚴格匹配：只匹配 "antigravity" 進程，排除 "antigravity-tools"（我們自己）
+            let is_antigravity = name == "antigravity"
+                || (exe_path.contains("/antigravity")
+                    && !exe_path.contains("antigravity-tools")
+                    && !name.contains("antigravity-tools"));
+
+            if is_antigravity {
                 return true;
             }
         }
@@ -61,7 +71,7 @@ pub fn close_antigravity(timeout_secs: u64) -> Result<(), String> {
         let _ = Command::new("taskkill")
             .args(["/F", "/IM", "Antigravity.exe"])
             .output();
-            
+
         // 给一点点时间让系统清理 PID
         thread::sleep(Duration::from_millis(200));
     }
@@ -73,7 +83,13 @@ pub fn close_antigravity(timeout_secs: u64) -> Result<(), String> {
             .args(["-e", "tell application \"Antigravity\" to quit"])
             .output();
     }
-    
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: 先嘗試優雅關閉 (SIGTERM)，使用 -x 精確匹配避免殺掉 antigravity-tools
+        let _ = Command::new("pkill").args(["-x", "antigravity"]).output();
+    }
+
     // 统一等待确认逻辑
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_secs(timeout_secs) {
@@ -87,12 +103,10 @@ pub fn close_antigravity(timeout_secs: u64) -> Result<(), String> {
     // 超时后的清理 (对 Windows 来说通常不会走到这里，除非权限不足)
     if is_antigravity_running() {
         crate::modules::logger::log_warn("关闭超时，正在尝试强制清理...");
-        
+
         #[cfg(target_os = "macos")]
         {
-            let _ = Command::new("pkill")
-                .args(["-9", "Antigravity"])
-                .output();
+            let _ = Command::new("pkill").args(["-9", "Antigravity"]).output();
         }
 
         #[cfg(target_os = "windows")]
@@ -105,15 +119,16 @@ pub fn close_antigravity(timeout_secs: u64) -> Result<(), String> {
 
         #[cfg(target_os = "linux")]
         {
+            // 使用 -x 進行精確匹配，避免殺掉 antigravity-tools
             let _ = Command::new("pkill")
-                .args(["-9", "antigravity"])
+                .args(["-9", "-x", "antigravity"])
                 .output();
         }
-        
+
         thread::sleep(Duration::from_secs(1));
 
         if is_antigravity_running() {
-             return Err("无法关闭 Antigravity 进程".to_string());
+            return Err("无法关闭 Antigravity 进程".to_string());
         }
     }
 
@@ -132,10 +147,13 @@ pub fn start_antigravity() -> Result<(), String> {
             .args(["-a", "Antigravity"])
             .output()
             .map_err(|e| format!("无法执行 open 命令: {}", e))?;
-            
+
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("启动失败 (open exited with {}): {}", output.status, error));
+            return Err(format!(
+                "启动失败 (open exited with {}): {}",
+                output.status, error
+            ));
         }
     }
 
@@ -145,7 +163,7 @@ pub fn start_antigravity() -> Result<(), String> {
         let result = Command::new("cmd")
             .args(["/C", "start", "antigravity://"])
             .spawn();
-        
+
         if result.is_err() {
             return Err("启动失败，请手动打开 Antigravity".to_string());
         }
@@ -163,7 +181,7 @@ pub fn start_antigravity() -> Result<(), String> {
 }
 
 /// 获取 Antigravity 可执行文件路径（跨平台）
-/// 
+///
 /// 查找策略（优先级从高到低）：
 /// 1. 从运行中的进程获取路径（最可靠，支持任意安装位置）
 /// 2. 遍历标准安装位置
@@ -173,26 +191,26 @@ pub fn get_antigravity_executable_path() -> Option<std::path::PathBuf> {
     if let Some(path) = get_path_from_running_process() {
         return Some(path);
     }
-    
+
     // 策略2: 检查标准安装位置
     check_standard_locations()
 }
 
 /// 从运行中的进程获取 Antigravity 可执行文件路径
-/// 
+///
 /// 这是最可靠的方法，可以找到任意位置的安装
 fn get_path_from_running_process() -> Option<std::path::PathBuf> {
     let mut system = System::new_all();
     system.refresh_all();
-    
+
     for process in system.processes().values() {
         #[allow(unused_variables)]
         let name = process.name().to_string_lossy().to_lowercase();
-        
+
         // 获取可执行文件路径
         if let Some(exe) = process.exe() {
             let exe_path = exe.to_str().unwrap_or("").to_lowercase();
-            
+
             #[cfg(target_os = "macos")]
             {
                 // macOS: 检查 Antigravity.app
@@ -200,7 +218,7 @@ fn get_path_from_running_process() -> Option<std::path::PathBuf> {
                     return Some(exe.to_path_buf());
                 }
             }
-            
+
             #[cfg(target_os = "windows")]
             {
                 // Windows: 严格匹配进程名
@@ -208,11 +226,16 @@ fn get_path_from_running_process() -> Option<std::path::PathBuf> {
                     return Some(exe.to_path_buf());
                 }
             }
-            
+
             #[cfg(target_os = "linux")]
             {
-                // Linux: 检查进程名或路径包含 antigravity
-                if name.contains("antigravity") || exe_path.contains("antigravity") {
+                // Linux: 嚴格匹配，排除 antigravity-tools
+                let is_antigravity = name == "antigravity"
+                    || (exe_path.contains("/antigravity")
+                        && !exe_path.contains("antigravity-tools")
+                        && !name.contains("antigravity-tools"));
+
+                if is_antigravity {
                     return Some(exe.to_path_buf());
                 }
             }
@@ -230,44 +253,44 @@ fn check_standard_locations() -> Option<std::path::PathBuf> {
             return Some(path);
         }
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         use std::env;
-        
+
         // 获取环境变量
         let local_appdata = env::var("LOCALAPPDATA").ok();
-        let program_files = env::var("ProgramFiles")
-            .unwrap_or_else(|_| "C:\\Program Files".to_string());
-        let program_files_x86 = env::var("ProgramFiles(x86)")
-            .unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
-        
+        let program_files =
+            env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        let program_files_x86 =
+            env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
+
         let mut possible_paths = Vec::new();
-        
+
         // 用户安装位置（优先）
         if let Some(local) = local_appdata {
             possible_paths.push(
                 std::path::PathBuf::from(&local)
                     .join("Programs")
                     .join("Antigravity")
-                    .join("Antigravity.exe")
+                    .join("Antigravity.exe"),
             );
         }
-        
+
         // 系统安装位置
         possible_paths.push(
             std::path::PathBuf::from(&program_files)
                 .join("Antigravity")
-                .join("Antigravity.exe")
+                .join("Antigravity.exe"),
         );
-        
+
         // 32位兼容位置
         possible_paths.push(
             std::path::PathBuf::from(&program_files_x86)
                 .join("Antigravity")
-                .join("Antigravity.exe")
+                .join("Antigravity.exe"),
         );
-        
+
         // 返回第一个存在的路径
         for path in possible_paths {
             if path.exists() {
@@ -275,7 +298,7 @@ fn check_standard_locations() -> Option<std::path::PathBuf> {
             }
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         let possible_paths = vec![
@@ -283,7 +306,7 @@ fn check_standard_locations() -> Option<std::path::PathBuf> {
             std::path::PathBuf::from("/opt/Antigravity/antigravity"),
             std::path::PathBuf::from("/usr/share/antigravity/antigravity"),
         ];
-        
+
         // 用户本地安装
         if let Some(home) = dirs::home_dir() {
             let user_local = home.join(".local/bin/antigravity");
@@ -291,13 +314,13 @@ fn check_standard_locations() -> Option<std::path::PathBuf> {
                 return Some(user_local);
             }
         }
-        
+
         for path in possible_paths {
             if path.exists() {
                 return Some(path);
             }
         }
     }
-    
+
     None
 }

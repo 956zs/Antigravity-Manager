@@ -1,0 +1,39 @@
+# Maintainer: Ctrler <your-email@example.com>
+# This is a binary package that uses pre-built releases from GitHub
+
+pkgname=antigravity-tools-bin
+_pkgname=antigravity-tools
+pkgver=2.1.1
+pkgrel=1
+pkgdesc="Professional Account Management for AI Services (Gemini / Claude) - Binary release"
+arch=('x86_64')
+url="https://github.com/lbjlaq/Antigravity-Manager"
+license=('custom:CC-BY-NC-SA-4.0')
+depends=(
+    'cairo'
+    'desktop-file-utils'
+    'gdk-pixbuf2'
+    'glib2'
+    'gtk3'
+    'hicolor-icon-theme'
+    'pango'
+    'webkit2gtk-4.1'
+    'libappindicator-gtk3'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname" "$_pkgname-git")
+# Update this URL to point to the actual release AppImage or deb
+source=("$_pkgname-$pkgver.deb::https://github.com/lbjlaq/Antigravity-Manager/releases/download/v$pkgver/antigravity-tools_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+    # Extract the deb package
+    cd "$srcdir"
+    
+    # Extract data from deb
+    ar x "$_pkgname-$pkgver.deb"
+    tar xf data.tar.* -C "$pkgdir"
+    
+    # Fix permissions if needed
+    chmod 755 "$pkgdir/usr/bin/"* 2>/dev/null || true
+}
